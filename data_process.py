@@ -7,7 +7,7 @@ import numpy as np
 
 #load rating data
 
-def Rating_info(file_path):
+def Rating_info(sc, file_path):
     rating = sc.textFile(file_path).map(lambda x:x.split('\t')).map(lambda x: Rating(x[0],x[1],x[2]))
     return rating
 
@@ -26,17 +26,24 @@ def transform_gender(gender):
     else:
         return 1
 
+# transform feature
+def transfromed_feature(leaf, num_leaf):
+    transfrom_feature_matrix = np.zeros([len(leaf), len(leaf[0]) * num_leaf], dtype=np.int64)
+    for i in range(len(leaf)):
+        temp = np.arange(len(leaf[0])) * num_leaf - 1 + np.array(leaf[i])
+        transfrom_feature_matrix[i][temp] += 1
+    return transfrom_feature_matrix
 
 #load user info data
 
-def user_info(file_path):
+def user_info(sc, file_path):
     user_info=sc.textFile(file_path).map(lambda x: x.split('|'))
     user_info_df = sc.parallelize((Row(user_id=data[0], age=float(split_age(int(data[1]))), gender=transform_gender(data[2]))) for data in user_info.collect()).toDF()
     return user_info_df
 
 #load item info data
 
-def item_info(file_path):
+def item_info(sc, file_path):
     item_info = sc.textFile(file_path).map(lambda line: line.split("|"))
     item_info_df = sc.parallelize((Row(item_id=data[0], movie_title=data[1], release_date=data[2], \
                                        video_release_data=data[3], imdb_url=data[4], unknow=float(data[5]), \
@@ -52,8 +59,9 @@ def item_info(file_path):
 #load sample
 
 
-def sample(rating_file_path, user_file_path, item_file_path, k):
-    item_info_df = item_info(item_file_path)
+def sample(sc, rating_file_path, user_file_path, item_file_path, k):
+    item_info_df = item_info(sc, item_file_path)
+    user_info_df = user_info(sc, user_file_path)
     num_item = range(item_info_df.count())
     #pos example
     pos = sc.textFile(rating_file_path).map(lambda x:x.split('\t'))
@@ -61,6 +69,7 @@ def sample(rating_file_path, user_file_path, item_file_path, k):
     pos_user_item = [[int(data[0]), int(data[1])] for data in pos_sample.select(['user_id','item_id']).collect()]
     pos_user_item_dict = {}
     neg_sample = []
+    print("starting...")
     for data in pos_user_item:
         if data[0] not in pos_user_item_dict.keys():
             pos_user_item_dict[data[0]] = [data[1]]
@@ -77,7 +86,17 @@ def sample(rating_file_path, user_file_path, item_file_path, k):
                pos_user_item_dict[data[0]].append(item[0])
     neg_sample_df = sc.parallelize((Row(user_id=data[0], item_id=data[1], label=float(data[3]))) for data in neg_sample)
     sample = pos_sample.union(neg_sample_df)
-    return sample
+    print("complete...")
+    return sample.join(user_info_df, on='user_id', how='left') \
+                  .join(item_info_df, on='item_id', how='left')
+
+def extract_feature_label(df):
+    feature = ['age', 'gender', 'action', 'adventure', 'animation', 'childrens', 'comedy', \
+               'crime', 'documentary', 'drama', 'fantasy', 'film_noir', 'horrormusical', 'mystery', 'romance', \
+               'sci_fi', 'thriller', 'unknow', 'war', 'western']
+    data_feature = [[float(data[i])] for i in range(feature) for data in df.select(feature).collect()]
+    data_label = [float(data) for data in df.select('label').collect()]
+    return data_feature, data_label
 
 if __name__=="__main__":
     sc = SparkContext('local', 'data_process')
